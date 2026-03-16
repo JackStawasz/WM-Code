@@ -1,8 +1,6 @@
 # Assignment 2: LSTM Code Summarization
 **CSCI 455/555 — Spring 2026 | Prof. Antonio Mastropaolo**
 
-- IMPORTANT SUBMISSION NOTE: I have already submitted the link to this repo in blackboard, however I plan to use the full time of the extension (deadline being Mar16 midnight) to finish sizing up my dataset construction and analyzing results.
-
 ---
 
 ## Overview
@@ -24,7 +22,7 @@ The following files must be present in Colab's working directory (`/content/`) b
 - `get_codet5_embeddings.py` — provided by the instructor; used to tokenize data and extract the CodeT5+ embedding matrix
 - `test_dataset_tokenized.csv` — instructor-provided test set (99 samples)
 
-The `all_pairs.pkl` file is a backup of the custom-mined GitHub dataset. Importing this file allows skipping cells 1.1 through 1.5.
+The `dataset/all_pairs.pkl` file is a backup of the custom-mined GitHub dataset. Importing this file allows skipping cells 1.1 through 1.5.
 
 ---
 
@@ -35,7 +33,7 @@ Two datasets are available and referenced in the notebook:
 ### 1. Custom-Mined GitHub Dataset (`/content/data/`)
 Java method–summary pairs mined from 59 public GitHub repositories using the GitHub API and `javalang`. Approximately 6,700 pairs were extracted after filtering test/example/generated directories.
 
-> **Note:** Data mining was performed in a separate Colab session. Due to Google Drive sync failures during that session, the mined pairs were saved locally and exported as `all_pairs_backup.pkl`. The notebook loads this pickle in place of re-running the mining pipeline. The mining code is included in the notebook for reproducibility but its saved outputs display results from that prior session.
+> **Note:** Data mining was performed in a separate Colab session. Due to Google Drive sync failures during that session, the mined pairs were saved locally and exported as `all_pairs.pkl` (contained in this repo). The notebook loads this pickle in place of re-running the mining pipeline. The mining code is included in the notebook for reproducibility but its saved outputs display results from that prior session.
 
 ### 2. CodeSearchNet Alternative Dataset (`/content/code_search_net/`)
 As a documented alternative, the notebook also includes a corpus construction pipeline using the HuggingFace `code_search_net` Java split — the reference dataset for this task (CodeXGLUE). This produces ~50,000 train pairs and 1,000 validation pairs, satisfying the assignment's corpus size requirements. This was used as a fallback due to the Drive persistence issues described above.
@@ -72,16 +70,16 @@ git clone https://github.com/antonio-mastropaolo/code-summarization-metric.git
 ## Reproducing the Results
 
 1. Open `assignment-2-LSTM.ipynb` in Google Colab with a T4 GPU runtime
-2. Place `get_codet5_embeddings.py`, `test_dataset_tokenized.csv`, and `all_pairs_backup.pkl` in `/content/`
+2. Place `get_codet5_embeddings.py`, `test_dataset_tokenized.csv`, and `all_pairs.pkl` in `/content/`
 3. Run all cells top to bottom
-4. The notebook will skip re-mining and load from `all_pairs_backup.pkl`
+4. The notebook will skip re-mining and load from `all_pairs.pkl`
 5. `.pt` embedding files will be generated in `/content/data/` or `/content/code_search_net/`
 
 The saved cell outputs in the notebook display results from the best trained model checkpoint.
 
 ---
 
-## Outputs
+## Outputs during Runtime
 
 All outputs are written to `/content/` (Colab local storage):
 
@@ -98,14 +96,13 @@ All outputs are written to `/content/` (Colab local storage):
 ## Evaluation Results (Test Set)
 
 | Metric | Score |
-|---|---|
-| BLEU-1 | 100.0 |
-| BLEU-2 | 100.0 |
-| BLEU-3 | 73.68 |
-| BLEU-4 | 47.29 |
-| METEOR | 0.095 |
-| BERTScore-F1 | 0.5882 |
-| SIDE | 0.1971 |
+BLEU-1       : 34.67
+BLEU-2       : 26.86
+BLEU-3       : 12.34
+BLEU-4       : 5.24
+METEOR       : 0.13
+BERTScore-F1 : 0.5621
+SIDE         : 0.2954
 
 ---
 
