@@ -95,14 +95,15 @@ All outputs are written to `/content/` (Colab local storage):
 
 ## Evaluation Results (Test Set)
 
-| Metric | Score |
-BLEU-1       : 34.67
-BLEU-2       : 26.86
-BLEU-3       : 12.34
-BLEU-4       : 5.24
-METEOR       : 0.13
-BERTScore-F1 : 0.5621
-SIDE         : 0.2954
+| Metric        | Score  |
+|---------------|--------|
+| BLEU-1        | 34.67  |
+| BLEU-2        | 26.86  |
+| BLEU-3        | 12.34  |
+| BLEU-4        | 5.24   |
+| METEOR        | 0.13   |
+| BERTScore-F1  | 0.5621 |
+| SIDE          | 0.2954 |
 
 ---
 
