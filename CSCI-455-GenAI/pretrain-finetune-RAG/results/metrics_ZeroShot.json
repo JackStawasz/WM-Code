@@ -1,0 +1,10 @@
+{
+  "tag": "Zero-shot (Qwen 1.5B)",
+  "n": 500,
+  "codebleu": 37.83,
+  "ngram_match": 3.39,
+  "weighted_ngram": 6.01,
+  "syntax_match": 63.88,
+  "dataflow_match": 78.04,
+  "exact_match": 0.0
+}

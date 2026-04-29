@@ -1,0 +1,10 @@
+{
+  "tag": "Pipeline B (fine-tuned only)",
+  "n": 6545,
+  "codebleu": 86.82,
+  "ngram_match": 90.5,
+  "weighted_ngram": 90.51,
+  "syntax_match": 82.46,
+  "dataflow_match": 83.82,
+  "exact_match": 2.32
+}

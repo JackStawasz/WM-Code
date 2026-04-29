@@ -1,0 +1,10 @@
+{
+  "tag": "RAG 3-shot (Qwen 1.5B)",
+  "n": 500,
+  "codebleu": 57.39,
+  "ngram_match": 34.0,
+  "weighted_ngram": 39.25,
+  "syntax_match": 73.45,
+  "dataflow_match": 82.85,
+  "exact_match": 1.4
+}

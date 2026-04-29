@@ -1,0 +1,10 @@
+{
+  "tag": "Pipeline A (pre-trained + fine-tuned)",
+  "n": 6545,
+  "codebleu": 64.51,
+  "ngram_match": 67.73,
+  "weighted_ngram": 67.99,
+  "syntax_match": 61.0,
+  "dataflow_match": 61.3,
+  "exact_match": 0.08
+}
