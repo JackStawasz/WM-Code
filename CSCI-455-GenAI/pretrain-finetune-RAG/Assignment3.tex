@@ -49,79 +49,58 @@
 
 \-\vspace{-1.1cm}
 \begin{abstract}
-The purpose of Assignment 3 is to investigate whether pre-training a small T5 model improves its ability to fix Java bugs, and how a fine-tuned task-specific model compares against a retrieval-augmented (RAG) prompting strategy using a much larger general-purpose LLM. Three pipelines are constructed: Pipeline A pre-trains a T5-small ($\sim$60M parameters) on 50K Java methods from CodeSearchNet using span corruption before fine-tuning on CodeXGLUE bug fixing; Pipeline B fine-tunes the same architecture from a fresh random initialization; and the RAG pipeline prompts \texttt{Qwen2.5-Coder-1.5B-Instruct} with CodeBERT-retrieved few-shot exemplars. Counterintuitively, Pipeline B achieves a higher CodeBLEU (86.82) than Pipeline A (64.51), suggesting that the small pre-training corpus and span-corruption objective are insufficient for downstream transfer at this scale. The RAG paradigm presents a clear inference-time vs. training-time trade-off: zero training cost in exchange for orders-of-magnitude greater per-sample latency.
+Assignment 3 investigates whether pre-training a small T5 model improves Java bug fixing, and how a fine-tuned task-specific model compares against retrieval-augmented prompting (RAG) of a larger LLM. Three pipelines are evaluated: Pipeline A (span-corruption pre-training on 50K CodeSearchNet methods, then fine-tuned), Pipeline B (same T5 architecture fine-tuned from random init), and a RAG pipeline that prompts \texttt{Qwen2.5-Coder-1.5B-Instruct} with CodeBERT-retrieved exemplars. Counterintuitively, Pipeline B (CodeBLEU 86.82) outperforms Pipeline A (64.51), indicating the small corpus is insufficient for useful transfer. RAG presents a clear trade-off: zero training cost for orders-of-magnitude greater per-sample latency.
 \end{abstract}
 
 
 \vspace{-0.6cm}
 \section{Introduction \& Training Details}
 
-This assignment compares two paradigms for solving the Java bug-fixing task: (i) training a small task-specific T5 model, and (ii) prompting a frozen larger LLM with retrieved context. The first paradigm itself splits into two sub-pipelines that isolate the effect of pre-training: Pipeline A loads a span-corruption pre-trained checkpoint before fine-tuning, while Pipeline B fine-tunes an identical T5 architecture from scratch. The second paradigm uses \texttt{Qwen2.5-Coder-1.5B-Instruct} as a frozen generator with both 3-shot RAG prompting and a zero-shot baseline. All experiments were conducted on a T4 GPU runtime in Google Colab. Pre-training and fine-tuning each took approximately 1.5--2 hours on the T4, while RAG inference dominates the wall-clock budget at $\sim$6 seconds per test sample due to Qwen's larger parameter count.
-
+This assignment compares two paradigms for Java bug-fixing: (i) training a small task-specific T5 model, and (ii) prompting a frozen larger LLM with retrieved context. The first paradigm splits into two sub-pipelines that isolate the effect of pre-training: Pipeline A loads a span-corruption pre-trained checkpoint before fine-tuning, while Pipeline B fine-tunes an identical T5 architecture from scratch. The second paradigm uses \texttt{Qwen2.5-Coder-1.5B-Instruct} as a frozen generator with both 3-shot RAG and a zero-shot baseline. All experiments were conducted on a T4 GPU in Google Colab. Pre-training and each fine-tuning run took $\sim$1.5--2 hours, while RAG inference dominates wall-clock time at $\sim$6 seconds per test sample due to Qwen's larger parameter count.
 
 
 \vspace{-0.4cm}
 \section{Tokenizer \& Model Configuration}
 
-A single SentencePiece tokenizer is trained on the 50K-method pre-training corpus using the Unigram subword algorithm with a base vocabulary of 16{,}284 tokens. The HuggingFace \texttt{T5Tokenizer} wrapper then appends 100 sentinel tokens (\texttt{<extra\_id\_0>} through \texttt{<extra\_id\_99>}) along with \texttt{<pad>}, \texttt{</s>}, and \texttt{<unk>}, yielding a final vocabulary of 16{,}384. This same tokenizer is reused by every downstream pipeline; no retraining or embedding re-initialization is performed between stages, so any difference in fine-tuning results is attributable solely to pre-training. Tokenizer sanity checks confirmed correct round-trip encoding/decoding of representative Java snippets and proper sentinel ID assignment.
-
-The T5 model is constructed manually via \texttt{T5Config} with \texttt{d\_model=512}, \texttt{d\_ff=2048}, \texttt{d\_kv=64}, \texttt{num\_heads=8}, and 6 encoder/decoder layers, producing a $\sim$52.4M parameter model after \texttt{resize\_token\_embeddings(len(tokenizer))}. The special-token IDs \texttt{decoder\_start\_token\_id}, \texttt{eos\_token\_id}, and \texttt{bos\_token\_id} are set to match the SentencePiece tokenizer's special-token mapping, ensuring that span-corruption targets and seq2seq decoding both behave correctly.
-
+A single SentencePiece tokenizer is trained on the 50K-method pre-training corpus using the Unigram subword algorithm with a base vocabulary of 16{,}284 tokens. The HuggingFace \texttt{T5Tokenizer} wrapper appends 100 sentinel tokens (\texttt{<extra\_id\_0>}--\texttt{<extra\_id\_99>}) along with \texttt{<pad>}, \texttt{</s>}, and \texttt{<unk>}, yielding a final vocabulary of 16{,}384. This same tokenizer is reused by every downstream pipeline---no retraining or embedding re-initialization between stages---so any difference in fine-tuning results is attributable solely to pre-training. Sanity checks confirmed correct round-trip encoding on Java snippets and proper sentinel ID assignment. The T5 model is constructed manually via \texttt{T5Config} with \texttt{d\_model=512}, \texttt{d\_ff=2048}, \texttt{d\_kv=64}, \texttt{num\_heads=8}, and 6 encoder/decoder layers, producing a $\sim$52.4M-parameter model after \texttt{resize\_token\_embeddings(len(tokenizer))}. Special-token IDs (\texttt{decoder\_start}, \texttt{eos}, \texttt{bos}) match the tokenizer's mapping to ensure span-corruption targets and seq2seq decoding behave correctly.
 
 
 \vspace{-0.4cm}
-\section{Pre-training Pipeline (Pipeline A)}
+\section{Pre-training \& Fine-tuning Pipelines}
 
-The pre-training corpus is sampled from the Java split of CodeSearchNet by extracting the \texttt{whole\_func\_string} field of 50{,}000 randomly-selected methods (seed 42). Methods are filtered to retain only those with 10--512 tokens after tokenization, ensuring sufficient context for span corruption while bounding compute. Each training example is corrupted by masking spans of consecutive tokens at an aggregate rate of 15\%, with each masked span replaced by a unique sentinel token. The decoder target reconstructs the masked spans separated by their corresponding sentinels, exactly matching the original T5 objective.
+\textbf{Pre-training (Pipeline A):} The corpus is sampled from the Java split of CodeSearchNet by extracting \texttt{whole\_func\_string} from 50{,}000 randomly-selected methods (seed 42), filtered to 10--512 tokens. Each example is corrupted at 15\% rate by masking spans of consecutive tokens with unique sentinel tokens; the decoder reconstructs the masked spans separated by their sentinels, exactly matching the original T5 objective. Training runs for 3 epochs with batch size 16, AdamW at LR $1\!\times\!10^{-4}$, mixed-precision via \texttt{GradScaler}, and gradient clipping at 1.0. Per the assignment specification, no validation split or checkpoint selection is used. Training loss decreases monotonically across all 3 epochs (Fig.~\ref{fig:loss}, left).
 
-Training runs for 3 epochs over the full 50K corpus with batch size 16, AdamW at learning rate $1\!\times\!10^{-4}$, mixed-precision via \texttt{torch.cuda.amp.GradScaler}, and gradient clipping at 1.0. Per the assignment specification, no validation split, no early stopping, and no checkpoint selection are used; only the final checkpoint is preserved. The training loss decreases monotonically across all three epochs (see Fig.~\ref{fig:pretrain}), confirming that the model is learning, although the absolute terminal loss remains relatively high---a known consequence of the small corpus size and the hardness of the span-reconstruction objective.
+\textbf{Fine-tuning (both pipelines):} Both use the CodeXGLUE \texttt{code\_x\_glue\_cc\_code\_refinement} medium split ($\sim$52K train / 6{,}545 val / 6{,}545 test \texttt{(buggy, fixed)} pairs), truncated to \texttt{MAX\_SRC\_LEN = MAX\_TGT\_LEN = 256}. Training uses AdamW at LR $1\!\times\!10^{-4}$, batch size 16, 10 epochs, with per-epoch checkpointing for mid-run resumption. Inference uses beam search (\texttt{num\_beams=4}) on the full 6{,}545 test instances. Pipeline A loads the pre-trained checkpoint; Pipeline B reconstructs an identical \texttt{T5Config} and trains from random initialization. Every fine-tuning hyperparameter is held constant across pipelines, so pre-training is the sole independent variable. Pipeline B's loss falls below Pipeline A's by mid-training (Fig.~\ref{fig:loss}, right), foreshadowing the test-set results.
 
-\vspace{-0.2cm}
+\vspace{-0.3cm}
 \begin{figure}[h!]
     \centering
-    \includegraphics[width=0.8\linewidth]{GenAI/resources/pretrain_loss.png}
-    \caption{Span-corruption pre-training loss per step for Pipeline A, captured from Notebook 1 (\texttt{1\_tokenizer\_and\_pretrain.ipynb}). Each marker represents a logging interval over the 3-epoch training run on 50K Java methods from CodeSearchNet.}
-    \label{fig:pretrain}
+    \includegraphics[width=0.95\linewidth]{GenAI/resources/pretrain_loss.png}
+    \vspace{-0.2cm}
+    \includegraphics[width=0.95\linewidth]{GenAI/resources/finetune_loss.png}
+    \vspace{-0.2cm}
+    \caption{Top: span-corruption pre-training loss (Pipeline A) over 3 epochs on 50K CodeSearchNet methods, from Notebook 1. Bottom: fine-tuning training loss for Pipelines A and B on CodeXGLUE bug fixing, from Notebook 2. Both pipelines share identical fine-tuning hyperparameters; only the initial weights differ.}
+    \label{fig:loss}
 \end{figure}
-
-
-
-\vspace{-0.4cm}
-\section{Fine-tuning Pipelines}
-
-Both fine-tuning pipelines use the CodeXGLUE \texttt{code\_x\_glue\_cc\_code\_refinement} dataset (medium split), which provides $\sim$52K training pairs, 6{,}545 validation pairs, and 6{,}545 test pairs of \texttt{(buggy, fixed)} Java methods. Inputs and targets are truncated to \texttt{MAX\_SRC\_LEN = MAX\_TGT\_LEN = 256} tokens. Training uses AdamW at learning rate $1\!\times\!10^{-4}$, batch size 16, 10 epochs, and per-epoch checkpointing to enable mid-run resumption. Inference uses beam search with \texttt{num\_beams=4} on the full 6{,}545-instance test set.
-
-Pipeline A loads the final pre-trained checkpoint and fine-tunes from there. Pipeline B reconstructs an identical \texttt{T5Config}, calls \texttt{resize\_token\_embeddings} against the same tokenizer, and trains from random initialization. Every fine-tuning hyperparameter is held constant across the two pipelines so that pre-training is the sole independent variable. Training-loss curves for both pipelines (Fig.~\ref{fig:finetune}) show smooth convergence; notably, Pipeline B's loss falls below Pipeline A's by mid-training, foreshadowing the test-set results.
-
-\vspace{-0.2cm}
-\begin{figure}[h!]
-    \centering
-    \includegraphics[width=0.8\linewidth]{GenAI/resources/finetune_loss.png}
-    \caption{Fine-tuning training loss for Pipeline A (pre-trained $\rightarrow$ fine-tuned) and Pipeline B (fine-tuned only) on CodeXGLUE bug fixing, captured from Notebook 2 (\texttt{2\_finetune\_and\_evaluate.ipynb}). Both pipelines share identical hyperparameters; only the initial weights differ.}
-    \label{fig:finetune}
-\end{figure}
-
 
 
 \vspace{-0.4cm}
 \section{RAG Pipeline}
 
-The RAG system uses \texttt{microsoft/codebert-base} with mean-pooling over the final hidden states as the encoder for both the knowledge base and queries. CodeBERT is preferred over Code2Vec for this task because its transformer architecture produces dense contextual embeddings that capture token-level semantics directly from raw code, making it well-matched to the buggy-method-retrieval setting where small lexical perturbations distinguish bugs from fixes. The training-set buggy methods are encoded once and indexed in a FAISS \texttt{IndexFlatL2} for L2-nearest-neighbor retrieval; at query time, each test buggy method is encoded and its top-$k=3$ nearest training neighbors are retrieved as few-shot exemplars.
-
-The generator is \texttt{Qwen/Qwen2.5-Coder-1.5B-Instruct}, prompted at \texttt{temperature=0} (greedy decoding) for reproducibility. Two prompt formats are evaluated: (1) a 3-shot RAG prompt presenting the retrieved \texttt{(buggy, fixed)} pairs followed by the query buggy method, and (2) a zero-shot baseline supplying only the query buggy method with the same instruction header. Generated outputs are post-processed to strip Markdown code fences before metric computation. To stay within Colab's GPU-time budget, the RAG and zero-shot evaluations were performed on a 500-sample subset of the test set rather than the full 6{,}545 instances; the fine-tuned models retain full-test-set evaluation.
-
+The RAG retriever uses \texttt{microsoft/codebert-base} with mean-pooling over the final hidden states. CodeBERT is preferred over Code2Vec because its transformer architecture produces dense contextual embeddings that capture token-level semantics directly from raw code, well-matched to a setting where small lexical perturbations distinguish bugs from fixes. The training-set buggy methods are encoded once and indexed in a FAISS \texttt{IndexFlatL2}; at query time, each test buggy method is encoded and its top-$k=3$ nearest neighbors are retrieved as few-shot exemplars. The generator is \texttt{Qwen/Qwen2.5-Coder-1.5B-Instruct} at \texttt{temperature=0} (greedy) for reproducibility. Two prompt formats are evaluated: a 3-shot RAG prompt presenting retrieved \texttt{(buggy, fixed)} pairs followed by the query, and a zero-shot baseline supplying only the query with the same instruction header. Outputs are post-processed to strip Markdown fences. To stay within Colab's GPU budget, RAG and zero-shot evaluation use a 500-sample test subset; the fine-tuned models retain full-test-set evaluation.
 
 
 \vspace{-0.4cm}
 \section{Results Analysis}
 
-Table~\ref{tab:metrics} reports CodeBLEU and exact-match accuracy across all four configurations. Pipeline B (fine-tune only) substantially outperforms Pipeline A (pre-train + fine-tune) on every CodeBLEU sub-score and on exact match. This contradicts the typical assumption that pre-training transfers useful representations and instead suggests three plausible causes: (i) the 50K-method pre-training corpus is too small for span corruption to learn broadly transferable structure; (ii) the span-corruption objective is sufficiently misaligned with seq2seq buggy$\rightarrow$fixed translation that the pre-trained weights bias the optimizer toward suboptimal regions; and (iii) using identical learning rates for both pipelines may over-perturb Pipeline A's pre-trained weights without a warmup or LR reduction. The CodeBLEU breakdown (n-gram, weighted n-gram, syntax, dataflow) tracks roughly proportionally between the two pipelines, indicating the gap is uniform across surface and structural quality rather than concentrated in any single dimension. Exact-match remains very low for both fine-tuned pipelines---a consequence of the fact that even small whitespace or identifier-naming variations break exact equality.
+Table~\ref{tab:metrics} reports CodeBLEU and exact-match across all four configurations. Pipeline B substantially outperforms Pipeline A on every sub-score, contradicting the typical assumption that pre-training transfers useful representations. Three plausible causes: (i) the 50K-method corpus is too small for span corruption to learn broadly transferable structure; (ii) the span-corruption objective is misaligned with seq2seq buggy$\rightarrow$fixed translation, biasing the optimizer toward suboptimal regions; (iii) using identical learning rates for both pipelines may over-perturb Pipeline A's pre-trained weights without warmup. The CodeBLEU breakdown tracks proportionally between pipelines, so the gap is uniform rather than localized. Exact-match remains very low for both---small whitespace or identifier-naming variations break exact equality.
 
-The RAG pipeline's results occupy a meaningfully different point in the design space. Despite using a model 25$\times$ larger than the T5-small backbone, RAG with 3-shot prompting achieves a CodeBLEU of 57.39, which falls below both fine-tuned pipelines; zero-shot Qwen achieves only 37.83. The 19.6-point lift from zero-shot to 3-shot (37.83 $\rightarrow$ 57.39) confirms that retrieval is contributing genuine signal---the retrieved exemplars are constraining Qwen toward more relevant fixes. A striking pattern within the RAG sub-scores is the large gap between n-gram precision (34.00) and structural scores (syntax: 73.45, dataflow: 82.85): Qwen generates syntactically valid and semantically coherent Java but uses different identifier names and phrasing than the reference, which deflates n-gram overlap while structural quality remains high.
+The RAG pipeline occupies a different design point. Despite using a model 25$\times$ larger than T5-small, RAG 3-shot achieves CodeBLEU 57.39---below both fine-tuned pipelines---while zero-shot Qwen achieves only 37.83. The 19.6-point lift from zero-shot to 3-shot confirms retrieval contributes genuine signal. A striking pattern is the gap between RAG's n-gram precision (34.00) and structural scores (syntax 73.45, dataflow 82.85): Qwen produces syntactically valid, semantically coherent Java but with different identifiers and phrasing than the reference, deflating n-gram overlap while structural quality remains high.
 
 \vspace{-0.2cm}
 \begin{table}[h!]
 \centering
+{\setstretch{1.0}
 \begin{tabular}{|l|c|c|c|c|c|c|}
 \hline
 \textbf{Configuration} & \textbf{CodeBLEU} & \textbf{n-gram} & \textbf{wt. n-gram} & \textbf{syntax} & \textbf{dataflow} & \textbf{Exact} \\ \hline
@@ -129,53 +108,22 @@ Pipeline A (pre-train + FT)  & 64.51 & 67.73 & 67.99 & 61.00 & 61.30 & 0.08 \\
 Pipeline B (FT only)         & 86.82 & 90.50 & 90.51 & 82.46 & 83.82 & 2.32 \\
 RAG 3-shot (Qwen 1.5B)       & 57.39 & 34.00 & 39.25 & 73.45 & 82.85 & 1.40 \\
 Zero-shot (Qwen 1.5B)        & 37.83 & 3.39  & 6.01  & 63.88 & 78.04 & 0.00 \\ \hline
-\end{tabular}
+\end{tabular}}
 \caption{CodeBLEU (with sub-metric breakdown) and exact-match accuracy on the CodeXGLUE bug-fix test set. Fine-tuned pipelines evaluate on the full 6{,}545 instances; RAG and zero-shot evaluate on a 500-sample subset.}
 \label{tab:metrics}
 \end{table}
 
 
+\vspace{-0.5cm}
+\subsection{Trade-off: Training Time vs.\ Inference Time \& Error Analysis} \vspace{-0.1cm}
 
-\vspace{-0.4cm}
-\subsection{Trade-off: Training Time vs.\ Inference Time} \vspace{-0.1cm}
-
-The most consequential difference between the fine-tuning and RAG paradigms is not raw accuracy but \textit{when} the compute is spent. Fine-tuning is expensive upfront and cheap at inference: each pipeline required approximately 1.5--2 hours on a T4 GPU for 10 epochs over 52K pairs, after which generating a fix for a new buggy method takes well under a second per sample with beam search. RAG inverts this profile: there is no training cost, but every inference call invokes a 1.5B-parameter LLM plus a CodeBERT encode and FAISS lookup, costing roughly 6 seconds per sample on the same T4. Table~\ref{tab:tradeoff} summarizes the resulting practical trade-off.
-
-\vspace{-0.2cm}
-\begin{table}[h!]
-\centering
-{\setstretch{1.0}
-\begin{tabular}{|l|c|c|c|}
-\hline
-\textbf{Aspect} & \textbf{Pipeline A} & \textbf{Pipeline B} & \textbf{RAG (Qwen 1.5B)} \\ \hline
-Pre-training time          & $\sim$1.5 hr (T4)    & ---                   & --- \\
-Fine-tuning time           & $\sim$2 hr (T4)      & $\sim$2 hr (T4)       & --- \\
-Index-build time           & ---                  & ---                   & $<$5 min (CodeBERT + FAISS) \\
-Inference time / sample    & $<$1 s               & $<$1 s                & $\sim$6 s \\
-Labeled data required      & 52K pairs            & 52K pairs             & 0 (KB only) \\
-Model size at deploy       & $\sim$60M params     & $\sim$60M params      & 1.5B params + index \\
-Task-portability           & Locked (retrain)     & Locked (retrain)      & Swap KB only \\
-\hline
-\end{tabular}}
-\caption{Resource and operational trade-offs across the three paradigms. Fine-tuning amortizes its cost across many cheap inferences; RAG pays per call but adapts to a new task by replacing the knowledge base.}
-\label{tab:tradeoff}
-\end{table}
-
-For a deployment that runs millions of inferences against a stable bug-fix task, the fine-tuned T5 wins decisively: it amortizes its training cost across many sub-second predictions and runs on commodity hardware. For a deployment that must adapt to new repositories, languages, or coding standards, the RAG pipeline wins: rebuilding the FAISS index over a new corpus takes minutes, while retraining a fine-tuned model takes hours and requires labeled data that may not exist.
-
-
-
-\vspace{-0.4cm}
-\subsection{Error Analysis} \vspace{-0.1cm}
-
-Pipeline A's underperformance relative to Pipeline B is the central anomaly. Beyond the corpus-size and objective-mismatch hypotheses, a contributing factor is that the span-corruption pre-training distribution (CodeSearchNet methods) differs structurally from the bug-fix distribution (small, often single-line, deltas in CodeXGLUE), so the inductive bias acquired in pre-training is partially counterproductive. Both fine-tuned pipelines also exhibit very low exact-match accuracy, reflecting their tendency to produce semantically equivalent but lexically divergent outputs (e.g., reordered statements, renamed locals). For RAG, the dominant failure mode is expected to be retrieval drift: when none of the top-3 retrieved exemplars share the query's bug pattern, the prompt provides no useful constraint and Qwen falls back to a zero-shot-like generation regardless of the few-shot wrapper.
-
+The key difference between fine-tuning and RAG is not raw accuracy but \textit{when} compute is spent. Fine-tuning is expensive upfront and cheap at inference: each pipeline took $\sim$1.5--2 hours on a T4 for 10 epochs over 52K pairs, after which generation runs in $<$1 s/sample. RAG inverts this: zero training cost, but every call invokes a 1.5B LLM plus a CodeBERT encode and FAISS lookup at $\sim$6 s/sample. Index-building is fast ($<$5 min) and label-free. Fine-tuned T5 wins for stable, high-volume deployments---it amortizes training across cheap predictions on commodity hardware---while RAG wins when the task changes often, since rebuilding the FAISS index takes minutes versus hours of retraining on labeled data that may not exist. Pipeline A's underperformance is exacerbated by distribution shift: CodeSearchNet methods differ structurally from CodeXGLUE bug-fix deltas (often single-line), so the inductive bias is partially counterproductive. RAG's dominant failure mode is retrieval drift: when no top-3 exemplar shares the query's bug pattern, Qwen falls back to near-zero-shot generation.
 
 
 \vspace{-0.3cm}
 \section{Reproducibility \& System Specifications} \vspace{-0.1cm}
 
-All experiments were run on Google Colab with a T4 GPU. The pipeline is split across three notebooks: (1) \texttt{1\_tokenizer\_and\_pretrain.ipynb} trains the SentencePiece tokenizer and pre-trains Pipeline A; (2) \texttt{2\_finetune\_and\_evaluate.ipynb} fine-tunes both pipelines and computes CodeBLEU/exact-match on the full test set; and (3) \texttt{3\_rag.ipynb} builds the FAISS index, runs 3-shot RAG and zero-shot inference, and computes the same metrics. All artifacts (tokenizer, pre-trained checkpoint, per-epoch fine-tuning checkpoints, prediction files, and metrics JSONs) are written to \texttt{/content/drive/MyDrive/W\&M/GenAI/Assignment\_3/}. Reproduction requires installing the dependencies in the README, mounting Drive, and running each notebook top-to-bottom; key parameters are summarized in Table~\ref{tab:params}.
+All experiments ran on Google Colab with a T4 GPU, split across three notebooks: \texttt{1\_tokenizer\_and\_pretrain.ipynb} (tokenizer + Pipeline A pre-training), \texttt{2\_finetune\_and\_evaluate.ipynb} (both fine-tuning pipelines + full-test-set CodeBLEU), and \texttt{3\_rag.ipynb} (FAISS index + RAG/zero-shot inference + metrics). All artifacts are written to \texttt{/content/drive/MyDrive/W\&M/GenAI/Assignment\_3/}. Reproduction requires installing dependencies (README), mounting Drive, and running each notebook top-to-bottom. Key parameters appear in Table~\ref{tab:params}.
 
 \vspace{-0.2cm}
 \begin{table}[h!]
@@ -184,31 +132,25 @@ All experiments were run on Google Colab with a T4 GPU. The pipeline is split ac
 \begin{tabular}{|l|c|l|}
 \hline
 \textbf{Parameter} & \textbf{Value} & \textbf{Description} \\ \hline
-\texttt{SP\_VOCAB\_SIZE}    & 16{,}284 (+100) & SentencePiece base + sentinels (16{,}384 total) \\
-\texttt{PT\_EPOCHS}         & 3              & Pre-training epochs (no early stopping) \\
-\texttt{PT\_LR}             & $1\times10^{-4}$ & AdamW LR for span-corruption pre-training \\
-Corruption rate             & 15\%           & Fraction of tokens masked into sentinel spans \\
-\texttt{FT\_EPOCHS}         & 10             & Fine-tuning epochs (Pipelines A and B) \\
-\texttt{FT\_LR}             & $1\times10^{-4}$ & AdamW LR for fine-tuning (identical A/B) \\
-\texttt{BATCH\_SIZE}        & 16             & Samples per gradient update \\
-\texttt{MAX\_SRC\_LEN/TGT\_LEN} & 256 / 256   & Token truncation for buggy/fixed methods \\
-\texttt{NUM\_BEAMS}         & 4              & Beam-search width at fine-tuned inference \\
-RAG retriever               & CodeBERT mean-pool & Encoder for FAISS \texttt{IndexFlatL2} \\
-RAG \texttt{TOP\_K}         & 3              & Few-shot exemplars per query \\
-RAG generator               & Qwen2.5-Coder-1.5B-Instruct & Frozen LLM, \texttt{temperature=0} \\
-\texttt{TEST\_SUBSET\_SIZE} & 500            & RAG/zero-shot test subset size \\
-\texttt{RANDOM\_SEED}       & 42             & Seed for shuffling and corpus sampling \\ \hline
+\texttt{SP\_VOCAB\_SIZE}                  & 16{,}384       & SentencePiece + 100 sentinels \\
+\texttt{PT\_EPOCHS} / \texttt{FT\_EPOCHS} & 3 / 10         & Pre-train / fine-tune epochs \\
+\texttt{LR} / \texttt{BATCH\_SIZE}        & $1\!\times\!10^{-4}$ / 16 & AdamW LR / batch size \\
+Corruption rate                           & 15\%           & Span-corruption mask rate \\
+\texttt{MAX\_SRC/TGT\_LEN}                & 256            & Token truncation length \\
+\texttt{NUM\_BEAMS}                       & 4              & Beam-search width \\
+RAG retriever / \texttt{TOP\_K}           & CodeBERT / 3   & Mean-pool + FAISS, 3-shot \\
+RAG generator / \texttt{TEMP}             & Qwen-1.5B / 0  & Frozen LLM, greedy \\
+\texttt{TEST\_SUBSET} / \texttt{SEED}     & 500 / 42       & RAG eval size / random seed \\ \hline
 \end{tabular}}
 \caption{Fixed experimental parameters across all three pipelines.}
 \label{tab:params}
 \end{table}
 
 
-
 \vspace{-0.4cm}
 \section{Discussion \& Conclusion}
 
-This project exposes three distinct lessons. First, pre-training is not a free win: with only 50K methods and 3 epochs of span corruption, Pipeline A's representations were not better than Pipeline B's random initialization for downstream bug fixing. The result aligns with Prof.\ Mastropaolo's framing that pre-training is a \textit{bet}, and shows the bet failing at this corpus scale. Second, the fine-tuning vs. RAG comparison is best understood as a temporal trade---pay now in training, or pay forever in inference. A 60M parameter T5 that responds in under a second per sample is well-suited to embedded developer tooling (e.g., an IDE linter), whereas the RAG pipeline's near-zero training cost and flexibility make it the better fit for one-off audits or rapidly-evolving knowledge bases. Third, retrieval quality bounds RAG's ceiling: the lift from zero-shot to 3-shot prompting is a direct measurement of how well the retriever captures bug-pattern similarity, and any RAG accuracy gains depend on the encoder choice as much as on the generator. Future work should investigate (i) larger and more diverse pre-training corpora to test whether Pipeline A's gap inverts at scale, (ii) lower fine-tuning learning rates or warmup schedules tailored to pre-trained initializations, and (iii) hybrid retrieval methods that combine lexical and semantic signals to reduce the retrieval-drift failure mode.
+Three lessons emerge. First, pre-training is not a free win: with only 50K methods and 3 epochs of span corruption, Pipeline A's representations did not beat Pipeline B's random initialization---the bet failed at this corpus scale. Second, the fine-tuning vs. RAG comparison is a temporal trade: a 60M T5 at $<$1 s/sample suits embedded tooling (e.g., IDE linters), while RAG's KB-swap flexibility fits one-off audits or evolving codebases. Third, retrieval quality bounds RAG's ceiling---the zero-shot$\rightarrow$3-shot lift directly measures retriever quality, so accuracy depends on the encoder as much as the generator. Future work: (i) larger pre-training corpora to test whether Pipeline A's gap inverts at scale, (ii) warmup or lower fine-tuning LRs tailored to pre-trained initializations, and (iii) hybrid lexical-semantic retrieval to reduce drift.
 
 
 
